@@ -1,0 +1,464 @@
+﻿using Pinterest.Models;
+using Microsoft.AspNetCore.Mvc;
+using System;
+using Pinterest.Data;
+using static System.Net.Mime.MediaTypeNames;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
+
+namespace Pinterest.Controllers
+{
+    public class PinsController : Controller
+    {
+        private readonly ApplicationDbContext db;
+        private IWebHostEnvironment _env;
+
+        private readonly UserManager<AppUser> _userManager;
+
+        private readonly RoleManager<IdentityRole> _roleManager;
+
+        public PinsController(ApplicationDbContext context, IWebHostEnvironment env, UserManager<AppUser> userManager, RoleManager<IdentityRole> roleManager)
+        {
+            db = context;
+            _env = env;
+            _userManager = userManager;
+            _roleManager = roleManager;
+        }
+
+        [HttpGet]
+        public IActionResult Index()
+        {
+            int _perPage = 3;
+
+            var pins = from pin in db.Pins
+                       orderby pin.LikesCount descending
+                       select pin;
+
+            var search = "";
+            // MOTOR DE CAUTARE
+            if (Convert.ToString(HttpContext.Request.Query["search"]) != null)
+            {
+                search = Convert.ToString(HttpContext.Request.Query["search"]).Trim();
+             
+                List<int> pinIds = db.Pins.Where
+                (
+                    at => at.Title.Contains(search)
+                    || at.Description.Contains(search)
+                ).Select(a => a.Id).ToList();
+
+                List<int> pinIdsOfCommentsWithSearchString =
+                db.Comments.Where
+                (
+                    c => c.Text.Contains(search)
+                ).Select(c => (int)c.PinId).ToList();
+
+                List<int> mergedIds = pinIds.Union(pinIdsOfCommentsWithSearchString).ToList();
+                
+                pins = db.Pins.Where(pin =>
+                    mergedIds.Contains(pin.Id))
+                    .Include("AppUser")
+                    .OrderBy(a => a.Date);
+            }
+
+            ViewBag.SearchString = search;
+
+
+            //Afisare paginata
+
+            if (TempData.ContainsKey("message"))
+            {
+                ViewBag.message = TempData["message"].ToString();
+                ViewBag.Alert = TempData["messageType"];
+            }
+
+            int totalItems = pins.Count();
+
+            var currentPage = Convert.ToInt32(HttpContext.Request.Query["page"]);
+
+            // Calculate the offset based on the current page
+            var offset = 0;
+
+            // Calculate the offset based on the current page
+            if (!currentPage.Equals(0))
+            {
+                offset = (currentPage - 1) * _perPage;
+            }
+
+            // Get the pins corresponding to the current page based on the offset
+            var paginatedPins = pins.Skip(offset).Take(_perPage);
+
+            // Calculate the last page
+            ViewBag.lastPage = Math.Ceiling((float)totalItems / (float)_perPage);
+
+            // Send the paginated pins to the corresponding view
+            ViewBag.Pins = paginatedPins;
+
+
+            //Motor de cautare
+            if (search != "")
+            {
+                ViewBag.PaginationBaseUrl = "/Pins/Index/?search=" + search + "&page";
+            }
+            else
+            {
+                ViewBag.PaginationBaseUrl = "/Pins/Index/?page";
+            }
+
+            return View();
+        }
+
+        [HttpGet]
+        public IActionResult IndexRecent()
+        {
+            int _perPage = 3;
+
+            var pins = from pin in db.Pins
+                       orderby pin.Date descending
+                       select pin;
+
+            var search = "";
+            // MOTOR DE CAUTARE
+            if (Convert.ToString(HttpContext.Request.Query["search"]) != null)
+            {
+                search = Convert.ToString(HttpContext.Request.Query["search"]).Trim();
+
+                List<int> pinIds = db.Pins.Where
+                (
+                at => at.Title.Contains(search)
+                || at.Description.Contains(search)
+                ).Select(a => a.Id).ToList();
+
+                List<int> pinIdsOfCommentsWithSearchString =
+                db.Comments.Where
+                (
+                c => c.Text.Contains(search)
+                ).Select(c => (int)c.PinId).ToList();
+
+                List<int> mergedIds = pinIds.Union(pinIdsOfCommentsWithSearchString).ToList();
+                pins = db.Pins.Where(pin =>
+                mergedIds.Contains(pin.Id))
+                .Include("AppUser")
+                .OrderBy(a => a.Date);
+            }
+            ViewBag.SearchString = search;
+
+
+            if (TempData.ContainsKey("message"))
+            {
+                ViewBag.message = TempData["message"].ToString();
+                ViewBag.Alert = TempData["messageType"];
+            }
+
+            int totalItems = pins.Count();
+
+            // Get the current page from the route parameter
+            var currentPage = Convert.ToInt32(HttpContext.Request.Query["page"]);
+
+            // Calculate the offset based on the current page
+            var offset = 0;
+
+            // Calculate the offset based on the current page
+            if (!currentPage.Equals(0))
+            {
+                offset = (currentPage - 1) * _perPage;
+            }
+
+            // Get the pins corresponding to the current page based on the offset
+            var paginatedPins = pins.Skip(offset).Take(_perPage);
+
+            // Calculate the last page
+            ViewBag.lastPage = Math.Ceiling((float)totalItems / (float)_perPage);
+
+            // Send the paginated pins to the corresponding view
+            ViewBag.Pins = paginatedPins;
+
+            //Motor de cautare
+            if (search != "")
+            {
+                ViewBag.PaginationBaseUrl = "/Pins/Index/?search=" + search + "&page";
+            }
+            else
+            {
+                ViewBag.PaginationBaseUrl = "/Pins/Index/?page";
+            }
+
+            return View();
+        }
+
+        [HttpGet]
+        public IActionResult Show(int? id)
+        {
+            // Include AppUser for each comment
+            var pin = db.Pins
+                .Include(p => p.Comments)
+                .ThenInclude(c => c.AppUser)
+                .FirstOrDefault(p => p.Id == id);
+
+            var user = _userManager.GetUserAsync(User).Result;
+
+            var categories = from c in db.Categories
+                             where c.AppUserId == user.Id
+                             && !(from pc in db.PinCategories
+                                  where pc.PinId == id
+                                  select pc.CategoryId).Contains(c.Id)
+                             select c;
+
+            if (pin == null)
+            {
+                return NotFound();
+            }
+
+            bool hasLiked = db.Likes.Any(like => like.PinId == id && like.AppUserId == user.Id);
+
+            ViewBag.Liked = hasLiked;
+            ViewBag.Pin = pin;
+            ViewBag.Comments = pin.Comments;
+            ViewBag.Categories = categories.ToList();
+
+            return View();
+        }
+
+        [HttpGet]
+        public IActionResult GeneralShow(int? id)
+        {
+            // Include AppUser for each comment
+            var pin = db.Pins
+                .Include(p => p.Comments)
+                .ThenInclude(c => c.AppUser)
+                .FirstOrDefault(p => p.Id == id);
+
+            if (pin == null)
+            {
+                return NotFound();
+            }
+
+            ViewBag.Pin = pin;
+            ViewBag.Comments = pin.Comments;
+
+            return View();
+        }
+
+        [Authorize(Roles = "User")]
+        [HttpGet]
+        public IActionResult New()
+        {
+            return View();
+        }
+        [HttpPost]
+        public async Task<IActionResult> New(Pin pin, IFormFile Path)
+        {
+            AppUser currentUser = await _userManager.GetUserAsync(User);
+
+            // Verificam daca exista imaginea in request (daca a fost incarcata o imagine)
+            if (Path != null && Path.Length > 0)
+            {
+                string folder;
+
+                // Check if the file is an image or video based on its content type
+                if (Path.ContentType.Contains("image"))
+                {
+                    folder = "images";
+                }
+                else if (Path.ContentType.Contains("video"))
+                {
+                    folder = "videos";
+                }
+                else
+                {
+                    // Handle other file types or display an error
+                    return View(pin);
+                }
+
+                var databaseFileName = $"/{folder}/";
+
+                // Handle file upload
+                var storagePath = System.IO.Path.Combine(_env.WebRootPath, folder, Path.FileName);
+                databaseFileName += Path.FileName;
+
+                using (var fileStream = new FileStream(storagePath, FileMode.Create))
+                {
+                    await Path.CopyToAsync(fileStream);
+                }
+
+                pin.EmbeddedContentPath = databaseFileName;
+            }
+
+            pin.Date = DateTime.Now;
+            pin.LikesCount = 0;
+            pin.AppUserId = currentUser.Id;
+
+            //ModelState["EmbeddedContentPath"].ValidationState = ModelValidationState.Valid;
+
+            // sterge erorile existente
+            ModelState.Clear();
+            // verifica iar
+            TryValidateModel(pin);
+
+            if (!ModelState.IsValid)
+            {
+                return View(pin);
+            }
+
+            db.Pins.Add(pin);
+            db.SaveChanges();
+            return RedirectToAction("Show", new { id = pin.Id });
+        }
+
+        [Authorize(Roles = "User,Admin")]
+        [HttpGet]
+        public IActionResult Edit(int? id)
+        {
+            Pin pin = db.Pins.Find(id);
+
+            AppUser currentUser = db.AppUsers.Find(_userManager.GetUserId(User));
+            if (currentUser.Id != pin.AppUserId)
+            {
+                return Forbid(); // Or return a different status code or redirect to an unauthorized page
+            }
+
+            return View(pin);
+        }
+
+        [HttpPost]
+        public ActionResult Edit(int id, Pin requestPin)
+        {
+            Pin pin = db.Pins.Find(id);
+
+            try
+            {
+                pin.Title = requestPin.Title;
+                pin.Description = requestPin.Description;
+                pin.Date = DateTime.Now;
+                db.SaveChanges();
+
+                return RedirectToAction("Show", new { id = pin.Id });
+            }
+            catch (Exception)
+            {
+                ViewBag.Pin = pin;
+                return View(requestPin);
+            }
+        }
+
+        [Authorize(Roles = "User,Admin")]
+        [HttpPost]
+        public async Task<IActionResult> Delete(int? id)
+        {
+            Pin pin = db.Pins.Find(id);
+
+            AppUser currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser.Id != pin.AppUserId && !User.IsInRole("Admin"))
+            {
+                return Forbid();
+            }
+
+            // Get the file path from the EmbeddedContentPath
+            string filePath = Path.Combine(_env.WebRootPath, pin.EmbeddedContentPath.TrimStart('/'));
+
+            // Check if the file exists before attempting to delete it
+            if (System.IO.File.Exists(filePath))
+            {
+                // Delete the file
+                System.IO.File.Delete(filePath);
+            }
+
+            // Remove the Pin from the database
+            db.Pins.Remove(pin);
+            db.SaveChanges();
+
+            return RedirectToAction("Index");
+        }
+
+        [Authorize(Roles = "User")]
+        [HttpPost]
+        public IActionResult Like(int id)
+        {
+            // Find the pin with the specified id
+            Pin pin = db.Pins.Find(id);
+
+            // Check if the pin exists
+            if (pin == null)
+            {
+                return NotFound(); // Or handle the case where the pin is not found
+            }
+
+            // Get the current user
+            AppUser currentUser = _userManager.GetUserAsync(User).Result;
+
+            // Check if the user has already liked the pin
+            bool hasLiked = db.Likes.Any(ul => ul.PinId == pin.Id && ul.AppUserId == currentUser.Id);
+
+            if (hasLiked)
+            {
+                // User has already liked the pin, unlike the pin
+                pin.LikesCount--;
+
+                // Remove the user's like from the database
+                UnlikePin(pin.Id, currentUser.Id);
+
+                return RedirectToAction("Show", new { id = pin.Id });
+            }
+
+            // User has not liked the pin, like the pin
+            pin.LikesCount++;
+
+            // Record the user's like for the pin to prevent duplicate likes
+            RecordUserLike(pin.Id);
+
+            return RedirectToAction("Show", new { id = pin.Id });
+        }
+
+        private void UnlikePin(int pinId, string userId)
+        {
+            // Find the user's like for the pin
+            Like userLike = db.Likes.FirstOrDefault(ul => ul.PinId == pinId && ul.AppUserId == userId);
+
+            if (userLike != null)
+            {
+                // Remove the user's like from the database
+                db.Likes.Remove(userLike);
+
+                // Save changes to the database
+                db.SaveChanges();
+            }
+        }
+
+        // Helper method to check if the current user has already liked the pin
+        private async Task<bool> HasUserLikedPin(int pinId)
+        {
+            // Get the current user
+            AppUser currentUser = await _userManager.GetUserAsync(User);
+
+            if (currentUser == null)
+            {
+                // Handle the case where the user is not authenticated or not found
+                return false;
+            }
+
+            // Check if the user has already liked the pin
+            return db.Likes.Where(ul => ul.PinId == pinId && ul.AppUserId == currentUser.Id).Any();
+        }
+
+        // Helper method to record the user's like for the pin
+        private void RecordUserLike(int pinId)
+        {
+            // Get the current user
+            AppUser currentUser = _userManager.GetUserAsync(User).Result;
+
+            // Record the user's like for the pin
+            Like userLike = new Like
+            {
+                PinId = pinId,
+                AppUserId = currentUser.Id
+            };
+
+            // Add the user's like to the database
+            db.Likes.Add(userLike);
+
+            // Save changes to the database
+            db.SaveChanges();
+        }
+    }
+}

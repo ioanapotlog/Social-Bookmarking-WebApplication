@@ -1,0 +1,14 @@
+﻿@model Pinterest.Models.Comment
+
+<h2>Add New Comment</h2>
+
+<form action="/Comments/New?pinId=@ViewBag.PinId" method="post">
+    @Html.Label("Text", "Text:")
+    <br />
+    @Html.TextBox("Text", null, new { @class = "form-control" })
+    @Html.ValidationMessage("Text", null, new { @class = "text-danger" })
+    <br />
+    <br />
+
+    <button class="btn btn-outline-success" type="submit">Submit</button>
+</form>

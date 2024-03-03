@@ -1,0 +1,9 @@
+bin/
+obj/
+packages/
+*/wwwroot/images/
+*/wwwroot/videos/
+.vs
+*.suo
+*.user
+*.Publish.xml
